@@ -308,6 +308,12 @@ class TionClimateEntity(CoordinatorEntity, ClimateEntity):
 
         device_data = data.get("data", {})
 
+        # Объединяем текущие данные из кэша с нашими оптимистичными переопределениями
+        is_on = self._opt_state.get("is_on", device_data.get("is_on", False))
+        speed = self._opt_state.get("speed", int(device_data.get("speed", 1)))
+        if not is_on:
+            speed = 0
+
         # Проверяем, что выбрал пользователь (Auto или конкретную скорость)
         fan_mode_opt = self._opt_state.get("fan_mode_opt")
         
@@ -318,7 +324,18 @@ class TionClimateEntity(CoordinatorEntity, ClimateEntity):
             auto_set = zone_mode_data.get("auto_set", {}) if isinstance(zone_mode_data, dict) else {}
             current_co2 = int(auto_set.get("co2", 900)) if isinstance(auto_set, dict) else 900
 
-            if fan_mode_opt == "Auto":
+            if not is_on:
+                # Если выключаем бризер, зона обязательно должна быть в ручном (manual) режиме,
+                # иначе MagicAir (авторежим) сразу же включит его обратно.
+                if current_mode == "auto":
+                    _LOGGER.info("Выключение бризера: зона %s в авторежиме. Переключаем в ручной...", self._zone_guid)
+                    try:
+                        await self._api.async_send_zone_mode(self._zone_guid, {"mode": "manual", "co2": current_co2})
+                        if isinstance(zone_mode_data, dict):
+                            zone_mode_data["current"] = "manual"
+                    except Exception as zone_err:
+                        _LOGGER.error("Не удалось переключить зону %s в ручной режим при выключении: %s", self._zone_guid, zone_err)
+            elif fan_mode_opt == "Auto":
                 # Если выбрали Auto, переводим зону в авто и не отправляем команду на бризер
                 _LOGGER.info("Переключаем зону %s в авторежим", self._zone_guid)
                 try:
@@ -342,12 +359,6 @@ class TionClimateEntity(CoordinatorEntity, ClimateEntity):
                             zone_mode_data["current"] = "manual"
                     except Exception as zone_err:
                         _LOGGER.error("Не удалось переключить зону %s в ручной режим: %s", self._zone_guid, zone_err)
-
-        # Объединяем текущие данные из кэша с нашими оптимистичными переопределениями
-        is_on = self._opt_state.get("is_on", device_data.get("is_on", False))
-        speed = self._opt_state.get("speed", int(device_data.get("speed", 1)))
-        if not is_on:
-            speed = 0
 
         heater_enabled = self._opt_state.get("heater_enabled", device_data.get("heater_enabled", False))
         t_set = self._opt_state.get("t_set", device_data.get("t_set", 20))

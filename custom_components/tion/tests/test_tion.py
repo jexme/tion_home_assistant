@@ -115,6 +115,12 @@ class TestTionIntegration(unittest.IsolatedAsyncioTestCase):
         # Ждем завершения фоновой отправки
         await asyncio.gather(*self.created_tasks)
         
+        # Проверяем, что зона принудительно перевелась в manual при выключении
+        self.api.async_send_zone_mode.assert_called_once_with(
+            self.zone_guid,
+            {"mode": "manual", "co2": 800}
+        )
+        
         # Проверяем отправленный API-пакет. Для обычного бризера heater_mode должен быть "heat"
         self.api.async_send_breezer_mode.assert_called_once_with(
             self.device_guid,
@@ -144,6 +150,12 @@ class TestTionIntegration(unittest.IsolatedAsyncioTestCase):
         
         # Ждем завершения фоновой отправки
         await asyncio.gather(*self.created_tasks)
+        
+        # Проверяем, что зона перевелась в manual при выключении
+        self.api.async_send_zone_mode.assert_called_once_with(
+            self.zone_guid,
+            {"mode": "manual", "co2": 800}
+        )
         
         # Проверяем отправленный API-пакет. Для модели 4S heater_mode должен быть "maintenance"
         self.api.async_send_breezer_mode.assert_called_once_with(
