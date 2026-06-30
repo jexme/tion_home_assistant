@@ -1,7 +1,7 @@
-"""Support for Tion zone mode select entity."""
-
 import logging
-from typing import Any, Dict, List, Optional
+import asyncio
+import time
+from typing import Any, Dict, Optional
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
@@ -18,8 +18,7 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-# Список допустимых режимов зоны
-ZONE_MODES = ["auto", "manual"]
+OPTIMISTIC_TIMEOUT = 6
 
 
 async def async_setup_entry(
@@ -27,7 +26,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Настройка платформы select для зон MagicAir."""
+    """Настройка платформы select."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: DataUpdateCoordinator = data["coordinator"]
     api: TionApi = data["api"]
@@ -36,97 +35,147 @@ async def async_setup_entry(
 
     for location in coordinator.data:
         for zone in location.get("zones", []):
-            # Создаём сущность выбора режима только для зон с устройствами
             if zone.get("devices") and not zone.get("is_virtual", False):
                 zone_guid = zone["guid"]
-                zone_name = zone.get("name") or "Зона"
-                entities.append(
-                    TionZoneModeSelect(coordinator, api, zone_guid, zone_name)
-                )
+                
+                for device in zone.get("devices", []):
+                    dev_type = device.get("type", "")
+                    if "breezer" in dev_type.lower() or "o2" in dev_type.lower() or "4s" in dev_type.lower():
+                        entities.append(
+                            TionBreezerModeSpeedSelect(coordinator, api, device["guid"], device["name"], zone_guid)
+                        )
 
     async_add_entities(entities)
 
 
-class TionZoneModeSelect(CoordinatorEntity, SelectEntity):
-    """Сущность выбора режима управления зоной MagicAir (авто/ручной)."""
+class TionBreezerModeSpeedSelect(CoordinatorEntity, SelectEntity):
+    """Единая сущность выбора режима управления (Auto) или ручной скорости (1-6)."""
 
     def __init__(
         self,
         coordinator: DataUpdateCoordinator,
         api: TionApi,
+        device_guid: str,
+        device_name: str,
         zone_guid: str,
-        zone_name: str,
     ) -> None:
-        """Инициализация сущности выбора режима."""
+        """Инициализация сущности."""
         super().__init__(coordinator)
         self._api = api
+        self._device_guid = device_guid
+        self._device_name = device_name
         self._zone_guid = zone_guid
-        self._zone_name = zone_name
 
-        self._attr_unique_id = f"tion_zone_mode_{zone_guid}"
-        self._attr_name = f"{zone_name} - Режим управления"
-        self._attr_options = ZONE_MODES
-        self._attr_icon = "mdi:home-automation"
+        self._attr_unique_id = f"tion_mode_speed_{device_guid}"
+        self._attr_name = f"{device_name} - Режим и Скорость"
+        self._attr_icon = "mdi:fan-auto"
+        
+        self._opt_option: Optional[str] = None
+        self._opt_timestamp: float = 0
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Привязываем к устройству MagicAir зоны."""
-        # Ищем MagicAir в данной зоне
-        magicair_guid = self._get_magicair_guid()
-        if magicair_guid:
-            return DeviceInfo(identifiers={(DOMAIN, magicair_guid)})
-        return DeviceInfo(identifiers={(DOMAIN, self._zone_guid)})
+        """Привязываем к устройству бризера."""
+        return DeviceInfo(identifiers={(DOMAIN, self._device_guid)})
+
+    def _get_device_data(self) -> Optional[Dict[str, Any]]:
+        for location in self.coordinator.data:
+            for zone in location.get("zones", []):
+                for device in zone.get("devices", []):
+                    if device.get("guid") == self._device_guid:
+                        return device
+        return None
 
     def _get_zone_data(self) -> Optional[Dict[str, Any]]:
-        """Ищет данные текущей зоны в кэше координатора."""
         for location in self.coordinator.data:
             for zone in location.get("zones", []):
                 if zone.get("guid") == self._zone_guid:
                     return zone
         return None
 
-    def _get_magicair_guid(self) -> Optional[str]:
-        """Ищет GUID устройства MagicAir в данной зоне."""
-        zone = self._get_zone_data()
-        if zone:
-            for device in zone.get("devices", []):
-                if device.get("type") in ("co2mb",) or "magic" in device.get("type", "").lower():
-                    return device.get("guid")
-        return None
+    @property
+    def options(self) -> list[str]:
+        """Возвращает список ['Auto', '1', '2', '3', '4', '5', '6']."""
+        device_data = self._get_device_data()
+        max_speed = 6
+        if device_data:
+            max_speed = int(device_data.get("max_speed", 6))
+        return ["Auto"] + [str(i) for i in range(1, max_speed + 1)]
 
     @property
     def current_option(self) -> Optional[str]:
-        """Возвращает текущий режим зоны."""
+        """Возвращает 'Auto' или текущую скорость как строку."""
+        if time.time() - self._opt_timestamp < OPTIMISTIC_TIMEOUT:
+            return self._opt_option
+
         zone = self._get_zone_data()
         if zone:
             mode_data = zone.get("mode", {})
             if isinstance(mode_data, dict):
-                return mode_data.get("current", "manual")
-        return "manual"
+                if mode_data.get("current") == "auto":
+                    return "Auto"
+
+        device_data = self._get_device_data()
+        if device_data:
+            data = device_data.get("data", {})
+            if isinstance(data, dict):
+                if not data.get("is_on", True):
+                    return "Auto"  # Если выключен, пусть покажет Auto (или лучше что-то другое, но оставим Auto по умолчанию, либо 1)
+                return str(data.get("speed", 1))
+        return "Auto"
 
     async def async_select_option(self, option: str) -> None:
-        """Переключает режим зоны (auto/manual)."""
-        _LOGGER.debug("Смена режима зоны %s на: %s", self._zone_guid, option)
+        """Пользователь выбрал опцию."""
+        self._opt_option = option
+        self._opt_timestamp = time.time()
+        self.async_write_ha_state()
+        
+        self.hass.async_create_task(self._async_apply_option(option))
+
+    async def _async_apply_option(self, option: str) -> None:
+        _LOGGER.debug("Выбрана опция %s для бризера %s", option, self._device_guid)
+
         zone = self._get_zone_data()
         if not zone:
-            _LOGGER.error("Зона %s не найдена в кэше", self._zone_guid)
             return
 
         mode_data = zone.get("mode", {})
         auto_set = mode_data.get("auto_set", {}) if isinstance(mode_data, dict) else {}
-        # Читаем текущий целевой CO2 из настроек авторежима
         current_co2 = int(auto_set.get("co2", 900)) if isinstance(auto_set, dict) else 900
 
         try:
-            await self._api.async_send_zone_mode(
-                self._zone_guid, {"mode": option, "co2": current_co2}
-            )
-            _LOGGER.info("Режим зоны %s успешно изменён на %s", self._zone_guid, option)
-            # Обновляем локально в кэше для мгновенного отображения
-            if isinstance(mode_data, dict):
-                mode_data["current"] = option
-            self.async_write_ha_state()
-            # Запрашиваем обновление данных от сервера
+            if option == "Auto":
+                # Переводим только зону в авто
+                await self._api.async_send_zone_mode(
+                    self._zone_guid, {"mode": "auto", "co2": current_co2}
+                )
+            else:
+                # 1. Переводим зону в manual
+                await self._api.async_send_zone_mode(
+                    self._zone_guid, {"mode": "manual", "co2": current_co2}
+                )
+                
+                # 2. Выставляем скорость на бризере
+                speed_target = int(option)
+                device_data = self._get_device_data()
+                if device_data:
+                    data = device_data.get("data", {})
+                    payload = {
+                        "is_on": True,
+                        "heater_enabled": data.get("heater_enabled", False),
+                        "heater_mode": "heat" if data.get("heater_enabled", False) else "maintenance",
+                        "t_set": int(data.get("t_set", 20)),
+                        "speed": speed_target,
+                        "speed_min_set": int(data.get("speed_min_set", 0)),
+                        "speed_max_set": int(data.get("speed_max_set", device_data.get("max_speed", 6))),
+                    }
+                    gate = data.get("gate")
+                    if gate is not None:
+                        payload["gate"] = gate
+                        
+                    await self._api.async_send_breezer_mode(self._device_guid, payload)
+
+            await asyncio.sleep(4)
             await self.coordinator.async_request_refresh()
         except TionApiError as err:
-            _LOGGER.error("Ошибка смены режима зоны %s: %s", self._zone_guid, err)
+            _LOGGER.error("Ошибка применения опции %s: %s", option, err)

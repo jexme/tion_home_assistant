@@ -51,6 +51,7 @@ async def async_setup_entry(
                     entities.append(TionBreezerSensor(coordinator, guid, name, dev_type, "temp_in"))
                     entities.append(TionBreezerSensor(coordinator, guid, name, dev_type, "temp_out"))
                     entities.append(TionBreezerSensor(coordinator, guid, name, dev_type, "filter"))
+                    entities.append(TionBreezerSensor(coordinator, guid, name, dev_type, "speed"))
 
     async_add_entities(entities)
 
@@ -168,6 +169,9 @@ class TionBreezerSensor(TionSensorBase):
         elif sensor_type == "filter":
             self._attr_name = f"{name} - Состояние фильтра"
             self._attr_icon = "mdi:air-filter"
+        elif sensor_type == "speed":
+            self._attr_name = f"{name} - Текущая скорость вентилятора"
+            self._attr_icon = "mdi:fan"
 
     @property
     def native_value(self) -> Any:
@@ -184,4 +188,8 @@ class TionBreezerSensor(TionSensorBase):
         elif self._sensor_type == "filter":
             need_replace = device_data.get("filter_need_replace", False)
             return "Замена" if need_replace else "ОК"
+        elif self._sensor_type == "speed":
+            if not device_data.get("is_on", True):
+                return "0"
+            return str(device_data.get("speed", "1"))
         return None

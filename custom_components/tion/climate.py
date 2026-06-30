@@ -186,18 +186,27 @@ class TionClimateEntity(CoordinatorEntity, ClimateEntity):
 
     @property
     def fan_mode(self) -> Optional[str]:
-        """Возвращает текущую скорость вентилятора."""
-        if not self.is_on:
-            return "0"
-
+        """Возвращает текущую скорость вентилятора или Auto."""
         if time.time() - self._opt_timestamp < OPTIMISTIC_TIMEOUT:
+            if "fan_mode_opt" in self._opt_state:
+                return self._opt_state["fan_mode_opt"]
             if "speed" in self._opt_state:
                 return str(self._opt_state["speed"])
 
+        # Проверяем, не в авто ли режиме находится зона
+        zone = self._get_zone_data()
+        if zone:
+            mode_data = zone.get("mode", {})
+            if isinstance(mode_data, dict):
+                if mode_data.get("current") == "auto":
+                    return "Auto"
+
         data = self._get_device_data()
         if data:
+            if not data.get("data", {}).get("is_on", True):
+                return "Auto"
             return str(int(data.get("data", {}).get("speed", 1)))
-        return None
+        return "Auto"
 
     @property
     def fan_modes(self) -> Optional[List[str]]:
@@ -205,8 +214,8 @@ class TionClimateEntity(CoordinatorEntity, ClimateEntity):
         data = self._get_device_data()
         if data:
             max_speed = data.get("max_speed", 6)
-            return [str(i) for i in range(1, max_speed + 1)]
-        return ["1", "2", "3", "4", "5", "6"]
+            return ["Auto"] + [str(i) for i in range(1, max_speed + 1)]
+        return ["Auto", "1", "2", "3", "4", "5", "6"]
 
     @property
     def min_temp(self) -> float:
@@ -249,13 +258,18 @@ class TionClimateEntity(CoordinatorEntity, ClimateEntity):
     async def async_set_fan_mode(self, fan_mode: str) -> None:
         """Установка скорости вентилятора."""
         _LOGGER.debug("Установка скорости вентилятора: %s", fan_mode)
-        try:
-            speed = int(fan_mode)
-        except ValueError:
-            speed = 1
+        
+        self._opt_state["fan_mode_opt"] = fan_mode
+        if fan_mode != "Auto":
+            try:
+                speed = int(fan_mode)
+            except ValueError:
+                speed = 1
+            self._opt_state["speed"] = speed
+            self._opt_state["is_on"] = (speed > 0)
+        else:
+            self._opt_state["is_on"] = True
 
-        self._opt_state["speed"] = speed
-        self._opt_state["is_on"] = (speed > 0)
         self._opt_timestamp = time.time()
         self.async_write_ha_state()
 
@@ -291,24 +305,40 @@ class TionClimateEntity(CoordinatorEntity, ClimateEntity):
 
         device_data = data.get("data", {})
 
-        # Проверяем режим зоны. Если зона находится в авторежиме (auto),
-        # перед отправкой настроек бризера переключаем зону в ручной режим (manual)
+        # Проверяем, что выбрал пользователь (Auto или конкретную скорость)
+        fan_mode_opt = self._opt_state.get("fan_mode_opt")
+        
         zone_data = self._get_zone_data()
         if zone_data:
             zone_mode_data = zone_data.get("mode", {})
             current_mode = zone_mode_data.get("current") if isinstance(zone_mode_data, dict) else zone_mode_data
-            if current_mode == "auto":
-                _LOGGER.info("Зона %s находится в авторежиме (auto). Переключаем в ручной режим (manual)...", self._zone_guid)
+            auto_set = zone_mode_data.get("auto_set", {}) if isinstance(zone_mode_data, dict) else {}
+            current_co2 = int(auto_set.get("co2", 900)) if isinstance(auto_set, dict) else 900
+
+            if fan_mode_opt == "Auto":
+                # Если выбрали Auto, переводим зону в авто и не отправляем команду на бризер
+                _LOGGER.info("Переключаем зону %s в авторежим", self._zone_guid)
                 try:
-                    # В API Tion для переключения зоны нужно также передать целевое co2 (берем текущую установку или 900)
-                    auto_set = zone_mode_data.get("auto_set", {}) if isinstance(zone_mode_data, dict) else {}
-                    current_co2 = int(auto_set.get("co2", 900)) if isinstance(auto_set, dict) else 900
-                    await self._api.async_send_zone_mode(self._zone_guid, {"mode": "manual", "co2": current_co2})
-                    # Обновляем локально в кэше
+                    await self._api.async_send_zone_mode(self._zone_guid, {"mode": "auto", "co2": current_co2})
                     if isinstance(zone_mode_data, dict):
-                        zone_mode_data["current"] = "manual"
+                        zone_mode_data["current"] = "auto"
                 except Exception as zone_err:
-                    _LOGGER.error("Не удалось переключить зону %s в ручной режим: %s", self._zone_guid, zone_err)
+                    _LOGGER.error("Не удалось переключить зону %s в авторежим: %s", self._zone_guid, zone_err)
+                
+                # При включении Auto дальше бризером управляет станция, мы команду на бризер не шлем
+                await asyncio.sleep(4.0)
+                await self.coordinator.async_request_refresh()
+                return
+            else:
+                # Если выбрана ручная скорость, проверяем, не в авторежиме ли зона
+                if current_mode == "auto":
+                    _LOGGER.info("Зона %s находится в авторежиме. Переключаем в ручной...", self._zone_guid)
+                    try:
+                        await self._api.async_send_zone_mode(self._zone_guid, {"mode": "manual", "co2": current_co2})
+                        if isinstance(zone_mode_data, dict):
+                            zone_mode_data["current"] = "manual"
+                    except Exception as zone_err:
+                        _LOGGER.error("Не удалось переключить зону %s в ручной режим: %s", self._zone_guid, zone_err)
 
         # Объединяем текущие данные из кэша с нашими оптимистичными переопределениями
         is_on = self._opt_state.get("is_on", device_data.get("is_on", False))
