@@ -245,7 +245,10 @@ class TionClimateEntity(CoordinatorEntity, ClimateEntity):
         else:
             self._opt_state["is_on"] = True
             # При включении выставляем скорость 1, если она была 0
-            current_speed = int(self.fan_mode or 1)
+            try:
+                current_speed = int(self.fan_mode)
+            except (ValueError, TypeError):
+                current_speed = 1
             self._opt_state["speed"] = current_speed if current_speed > 0 else 1
             self._opt_state["heater_enabled"] = (hvac_mode == HVACMode.HEAT)
 
@@ -329,7 +332,7 @@ class TionClimateEntity(CoordinatorEntity, ClimateEntity):
                 await asyncio.sleep(4.0)
                 await self.coordinator.async_request_refresh()
                 return
-            else:
+            elif fan_mode_opt in [str(i) for i in range(1, 7)]:
                 # Если выбрана ручная скорость, проверяем, не в авторежиме ли зона
                 if current_mode == "auto":
                     _LOGGER.info("Зона %s находится в авторежиме. Переключаем в ручной...", self._zone_guid)
@@ -349,11 +352,16 @@ class TionClimateEntity(CoordinatorEntity, ClimateEntity):
         heater_enabled = self._opt_state.get("heater_enabled", device_data.get("heater_enabled", False))
         t_set = self._opt_state.get("t_set", device_data.get("t_set", 20))
 
+        is_4s = "4s" in self._device_type.lower()
+        heater_mode = "heat"
+        if not heater_enabled and is_4s:
+            heater_mode = "maintenance"
+
         # Формируем пакет параметров для отправки в Tion API
         command_data = {
             "is_on": is_on,
             "heater_enabled": heater_enabled,
-            "heater_mode": "heat" if heater_enabled else "maintenance",
+            "heater_mode": heater_mode,
             "t_set": int(t_set),
             "speed": speed if speed > 0 else 1,  # В API Tion выключенный статус регулируется is_on, а скорость > 0
             "speed_min_set": int(device_data.get("speed_min_set", 0)),

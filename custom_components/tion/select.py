@@ -159,11 +159,18 @@ class TionBreezerModeSpeedSelect(CoordinatorEntity, SelectEntity):
                 speed_target = int(option)
                 device_data = self._get_device_data()
                 if device_data:
+                    dev_type = device_data.get("type", "")
+                    is_4s = "4s" in dev_type.lower()
                     data = device_data.get("data", {})
+                    heater_enabled = data.get("heater_enabled", False)
+                    heater_mode = "heat"
+                    if not heater_enabled and is_4s:
+                        heater_mode = "maintenance"
+
                     payload = {
                         "is_on": True,
-                        "heater_enabled": data.get("heater_enabled", False),
-                        "heater_mode": "heat" if data.get("heater_enabled", False) else "maintenance",
+                        "heater_enabled": heater_enabled,
+                        "heater_mode": heater_mode,
                         "t_set": int(data.get("t_set", 20)),
                         "speed": speed_target,
                         "speed_min_set": int(data.get("speed_min_set", 0)),
