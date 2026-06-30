@@ -1,0 +1,11 @@
+{
+  "domain": "tion",
+  "name": "Tion Breezer & MagicAir (Async)",
+  "codeowners": ["@jexme"],
+  "config_flow": true,
+  "documentation": "https://github.com/jexme/tion_home_assistant",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/jexme/tion_home_assistant/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}
