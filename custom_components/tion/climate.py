@@ -242,14 +242,23 @@ class TionClimateEntity(CoordinatorEntity, ClimateEntity):
         if hvac_mode == HVACMode.OFF:
             self._opt_state["is_on"] = False
             self._opt_state["speed"] = 0
+            self._opt_state.pop("fan_mode_opt", None)
         else:
+            was_off = not self.is_on
             self._opt_state["is_on"] = True
-            # При включении выставляем скорость 1, если она была 0
-            try:
-                current_speed = int(self.fan_mode)
-            except (ValueError, TypeError):
-                current_speed = 1
-            self._opt_state["speed"] = current_speed if current_speed > 0 else 1
+            
+            if was_off:
+                # При включении выставляем режим Auto по умолчанию
+                self._opt_state["fan_mode_opt"] = "Auto"
+                self._opt_state.pop("speed", None)
+            else:
+                # Если уже включен, сохраняем текущую скорость
+                try:
+                    current_speed = int(self.fan_mode)
+                except (ValueError, TypeError):
+                    current_speed = 1
+                self._opt_state["speed"] = current_speed if current_speed > 0 else 1
+
             self._opt_state["heater_enabled"] = (hvac_mode == HVACMode.HEAT)
 
         self._opt_timestamp = time.time()
@@ -336,7 +345,7 @@ class TionClimateEntity(CoordinatorEntity, ClimateEntity):
                     except Exception as zone_err:
                         _LOGGER.error("Не удалось переключить зону %s в ручной режим при выключении: %s", self._zone_guid, zone_err)
             elif fan_mode_opt == "Auto":
-                # Если выбрали Auto, переводим зону в авто и не отправляем команду на бризер
+                # Если выбрали Auto, переводим зону в авто
                 _LOGGER.info("Переключаем зону %s в авторежим", self._zone_guid)
                 try:
                     await self._api.async_send_zone_mode(self._zone_guid, {"mode": "auto", "co2": current_co2})
@@ -345,10 +354,11 @@ class TionClimateEntity(CoordinatorEntity, ClimateEntity):
                 except Exception as zone_err:
                     _LOGGER.error("Не удалось переключить зону %s в авторежим: %s", self._zone_guid, zone_err)
                 
-                # При включении Auto дальше бризером управляет станция, мы команду на бризер не шлем
-                await asyncio.sleep(4.0)
-                await self.coordinator.async_request_refresh()
-                return
+                # Если менялся только режим вентилятора на Auto, не шлем команду на бризер (им управляет станция)
+                if "is_on" not in self._opt_state and "heater_enabled" not in self._opt_state and "t_set" not in self._opt_state:
+                    await asyncio.sleep(4.0)
+                    await self.coordinator.async_request_refresh()
+                    return
             elif fan_mode_opt in [str(i) for i in range(1, 7)]:
                 # Если выбрана ручная скорость, проверяем, не в авторежиме ли зона
                 if current_mode == "auto":
