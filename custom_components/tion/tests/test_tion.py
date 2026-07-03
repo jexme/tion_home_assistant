@@ -96,6 +96,22 @@ class TestTionIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entity.fan_mode, "Auto")
         self.assertEqual(entity.fan_modes, ["Auto", "1", "2", "3", "4"])
 
+    def test_climate_entity_properties_auto_speed_0(self):
+        """Проверка, что бризер в режиме auto со скоростью 0 (is_on=False) отображается как включенный."""
+        # Модифицируем данные для этого теста
+        self.mock_device_data["data"]["is_on"] = False
+        self.mock_device_data["data"]["speed"] = 0
+        self.mock_zone_data["mode"]["current"] = "auto"
+        
+        entity = TionClimateEntity(
+            self.coordinator, self.api, self.device_guid, self.device_name, "breezer", self.zone_guid
+        )
+        
+        # Сущность должна быть логически включена
+        self.assertTrue(entity.is_on)
+        self.assertEqual(entity.fan_mode, "Auto")
+        self.assertIn(entity.hvac_mode, [HVACMode.FAN_ONLY, HVACMode.HEAT])
+
     @patch("custom_components.tion.climate.time.time", return_value=100.0)
     async def test_climate_set_hvac_mode_off(self, mock_time):
         """Проверка выключения климатической сущности."""

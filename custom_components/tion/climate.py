@@ -142,6 +142,15 @@ class TionClimateEntity(CoordinatorEntity, ClimateEntity):
             if "is_on" in self._opt_state:
                 return self._opt_state["is_on"]
 
+        # Если зона в режиме auto, бризер логически включен (управляется MagicAir),
+        # даже если сейчас он физически остановился (is_on = False, speed = 0).
+        zone = self._get_zone_data()
+        if zone:
+            mode_data = zone.get("mode", {})
+            if isinstance(mode_data, dict):
+                if mode_data.get("current") == "auto":
+                    return True
+
         data = self._get_device_data()
         if data:
             return data.get("data", {}).get("is_on", False)
