@@ -49,7 +49,7 @@ async def async_setup_entry(
 
 
 class TionBreezerModeSpeedSelect(CoordinatorEntity, SelectEntity):
-    """Единая сущность выбора режима управления (Auto) или ручной скорости (1-6)."""
+    """Единая сущность выбора режима управления (Auto) или ручной скорости (1-max_speed)."""
 
     def __init__(
         self,
@@ -95,7 +95,7 @@ class TionBreezerModeSpeedSelect(CoordinatorEntity, SelectEntity):
 
     @property
     def options(self) -> list[str]:
-        """Возвращает список ['Auto', '1', '2', '3', '4', '5', '6']."""
+        """Возвращает список ['Auto', '1', '2', ..., 'max_speed']."""
         device_data = self._get_device_data()
         max_speed = 6
         if device_data:
