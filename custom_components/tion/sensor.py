@@ -1,6 +1,7 @@
 """Support for Tion sensors."""
 
 import logging
+import math
 from typing import Any, Dict, Optional
 
 from homeassistant.components.sensor import (
@@ -133,13 +134,23 @@ class TionMagicAirSensor(TionSensorBase):
             return None
 
         device_data = data.get("data", {})
+        val = None
         if self._sensor_type == "co2":
-            return device_data.get("co2")
+            val = device_data.get("co2")
         elif self._sensor_type == "temperature":
-            return device_data.get("temperature")
+            val = device_data.get("temperature")
         elif self._sensor_type == "humidity":
-            return device_data.get("humidity")
-        return None
+            val = device_data.get("humidity")
+            
+        if val is None:
+            return None
+        try:
+            f_val = float(val)
+            if math.isnan(f_val) or math.isinf(f_val):
+                return None
+            return f_val
+        except (ValueError, TypeError):
+            return None
 
 
 class TionBreezerSensor(TionSensorBase):
@@ -181,10 +192,11 @@ class TionBreezerSensor(TionSensorBase):
             return None
 
         device_data = data.get("data", {})
+        val = None
         if self._sensor_type == "temp_in":
-            return device_data.get("t_in")
+            val = device_data.get("t_in")
         elif self._sensor_type == "temp_out":
-            return device_data.get("t_out")
+            val = device_data.get("t_out")
         elif self._sensor_type == "filter":
             need_replace = device_data.get("filter_need_replace", False)
             return "Замена" if need_replace else "ОК"
@@ -192,4 +204,16 @@ class TionBreezerSensor(TionSensorBase):
             if not device_data.get("is_on", True):
                 return "0"
             return str(device_data.get("speed", "1"))
-        return None
+        else:
+            return None
+
+        # Проверка числовых значений для temp_in и temp_out
+        if val is None:
+            return None
+        try:
+            f_val = float(val)
+            if math.isnan(f_val) or math.isinf(f_val):
+                return None
+            return f_val
+        except (ValueError, TypeError):
+            return None
